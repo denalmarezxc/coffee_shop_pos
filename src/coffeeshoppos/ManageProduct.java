@@ -15,6 +15,11 @@ import javax.swing.table.DefaultTableModel;
 import java.io.*;
 import coffeeshoppos.DBConnection;
 
+import java.awt.Component;
+import javax.swing.*;
+import javax.swing.table.TableCellRenderer;
+import java.awt.Image;
+
 public class ManageProduct extends javax.swing.JFrame {
     
     private static final java.util.logging.Logger logger = java.util.logging.Logger.getLogger(ManageProduct.class.getName());
@@ -32,11 +37,27 @@ public class ManageProduct extends javax.swing.JFrame {
     public ManageProduct() {
         initComponents();
         con = DBConnection.getConnection();
-        
-        this.userRole = "admin";// role
-        LoadTable();
+        addFieldListeners();
+        jTable1.getColumn("Image").setCellRenderer(new ImageRenderer());
+        jTable1.setModel(new javax.swing.table.DefaultTableModel(
+                new Object[][]{},
+                new String[]{"ID", "Name", "Category", "Price", "Quantity", "Image"}
+        ) {
+            @Override
+            public Class<?> getColumnClass(int column) {
+                if (column == 5) {
+                    return ImageIcon.class;
+                }
+                return Object.class;
+            }
+        });
 
-        // Role-based security
+        jTable1.setRowHeight(70);
+        jTable1.getColumn("Image").setPreferredWidth(80);
+
+        this.userRole = "admin"; // role
+        loadProducts(); // ✅ Load with images
+
         if (!"admin".equals(userRole)) {
             JOptionPane.showMessageDialog(this, "Access denied! Only admin can manage products.");
             this.dispose();
@@ -65,24 +86,34 @@ public class ManageProduct extends javax.swing.JFrame {
         }
     }
     private void loadProducts() {
-        try {
-            pst = con.prepareStatement("SELECT product_id, product_name, category, price, stock_quantity FROM tbl_product");
-            rs = pst.executeQuery();
+        DefaultTableModel model = (DefaultTableModel) jTable1.getModel();
+        model.setRowCount(0);
 
-            DefaultTableModel model = (DefaultTableModel) jTable1.getModel();
-            model.setRowCount(0);
+        try (Connection con = DBConnection.getConnection(); PreparedStatement pst = con.prepareStatement("SELECT * FROM tbl_product"); ResultSet rs = pst.executeQuery()) {
 
             while (rs.next()) {
-                model.addRow(new Object[]{
-                    rs.getInt("product_id"),
-                    rs.getString("product_name"),
-                    rs.getString("category"),
-                    rs.getDouble("price"),
-                    rs.getInt("stock_quantity")
-                });
+                int id = rs.getInt("product_id");
+                String name = rs.getString("product_name");
+                double price = rs.getDouble("price");
+                String category = rs.getString("category");
+                String quantity = rs.getString("stock_quantity");
+                byte[] imgBytes = rs.getBytes("image");
+                ImageIcon imageIcon = null;
+                if (imgBytes != null) {
+                    Image img = new ImageIcon(imgBytes).getImage().getScaledInstance(70, 70, Image.SCALE_SMOOTH);
+                    imageIcon = new ImageIcon(img);
+                }
+
+                Object[] row = {id, name, category,  price, quantity, imageIcon};
+                model.addRow(row);
             }
+
+            // increase row height for images
+            jTable1.setRowHeight(70);
+
         } catch (SQLException e) {
             JOptionPane.showMessageDialog(this, "Error loading products: " + e.getMessage());
+            e.printStackTrace();
         }
     }
     
@@ -111,113 +142,204 @@ public class ManageProduct extends javax.swing.JFrame {
     }
 
     private void addProduct() {
-        if (!validateFields())
-            return;
+        addFieldListeners();
         
+        if (!validateFields()) {
+            return;
+        }
+
         if (isDuplicateProduct(fld_name.getText().trim(), null)) {
             JOptionPane.showMessageDialog(this, "Product name already exists!");
             return;
         }
-        
-        try {
-            pst = con.prepareStatement("INSERT INTO tbl_product (product_name, category, price, stock_quantity, image) VALUES (?,?,?,?,?)");
+
+        String sql = "INSERT INTO tbl_product (product_name, category, price, stock_quantity, image) VALUES (?,?,?,?,?)";
+
+        try (
+            Connection con = DBConnection.getConnection(); 
+            PreparedStatement pst = con.prepareStatement(sql)) {
+
             pst.setString(1, fld_name.getText());
             pst.setString(2, (String) jComboBoxCategory.getSelectedItem());
             pst.setDouble(3, Double.parseDouble(fld_price.getText()));
             pst.setInt(4, Integer.parseInt(fld_qty.getText()));
             pst.setBytes(5, productImage);
-            pst.executeUpdate();
-            JOptionPane.showMessageDialog(this, "Product Added!");
-            loadProducts();
-            clearFields();
-        } catch (Exception e) {
-            JOptionPane.showMessageDialog(this, "Error Adding Product: " + e.getMessage());
-            clearFields();
+
+            int rows = pst.executeUpdate();
+
+            if (rows > 0) {
+                JOptionPane.showMessageDialog(this, "✅ Product added successfully!");
+                loadProducts();
+                clearFields();
+                updateButtonStates(false);
+            }
+
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(this, "❌ Error Adding Product: " + e.getMessage());
+            e.printStackTrace();
         }
+        
+        
     }
 
+
     private void updateProduct() {
-        
-        if (!validateFields())
+        if (!validateFields()) {
             return;
-        
+        }
+
         if (lbl_prodID.getText().trim().isEmpty()) {
             JOptionPane.showMessageDialog(this, "Please select a product to update.");
             return;
         }
 
-        int productId = Integer.parseInt(lbl_prodID.getText());
+        int productId = Integer.parseInt(lbl_prodID.getText().trim());
 
-        //  Duplicate checker
+        
         if (isDuplicateProduct(fld_name.getText().trim(), productId)) {
             JOptionPane.showMessageDialog(this, "Another product with this name already exists!");
             return;
         }
-        
-        try {
-            pst = con.prepareStatement("UPDATE tbl_product SET product_name=?, category=?, price=?, stock_quantity=?, image=? WHERE product_id=?");
+
+        String sql = "UPDATE tbl_product SET product_name=?, category=?, price=?, stock_quantity=?, image=? WHERE product_id=?";
+
+        try (Connection con = DBConnection.getConnection(); PreparedStatement pst = con.prepareStatement(sql)) {
+
             pst.setString(1, fld_name.getText());
             pst.setString(2, (String) jComboBoxCategory.getSelectedItem());
             pst.setDouble(3, Double.parseDouble(fld_price.getText()));
             pst.setInt(4, Integer.parseInt(fld_qty.getText()));
             pst.setBytes(5, productImage);
-            pst.setInt(6, Integer.parseInt(lbl_prodID.getText()));
-            pst.executeUpdate();
-            JOptionPane.showMessageDialog(this, "Product Updated!");
-            loadProducts();
-            clearFields();
-        } catch (Exception e) {
-            JOptionPane.showMessageDialog(this, "Error Updating Product: " + e.getMessage());
-            clearFields();
+            pst.setInt(6, productId);
+
+            int rows = pst.executeUpdate();
+
+            if (rows > 0) {
+                JOptionPane.showMessageDialog(this, "✅ Product updated successfully!");
+                loadProducts();
+                clearFields();
+                updateButtonStates(false);
+            } else {
+                JOptionPane.showMessageDialog(this, "⚠️ No product found to update.");
+            }
+
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(this, "❌ Error Updating Product: " + e.getMessage());
+            e.printStackTrace();
         }
+        
+        addFieldListeners();
     }
+
 
     private void deleteProduct() {
-        
-        
-        try {
-            pst = con.prepareStatement("DELETE FROM tbl_product WHERE product_id=?");
-            pst.setInt(1, Integer.parseInt(lbl_prodID.getText()));
-            pst.executeUpdate();
-            JOptionPane.showMessageDialog(this, "Product Deleted!");
-            loadProducts();
-            clearFields();
-        } catch (Exception e) {
+        if (lbl_prodID.getText().trim().isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Please select a product to delete.");
+            return;
+        }
+
+        int confirm = JOptionPane.showConfirmDialog(
+                this,
+                "Are you sure you want to delete this product?",
+                "Confirm Delete",
+                JOptionPane.YES_NO_OPTION
+        );
+
+        if (confirm != JOptionPane.YES_OPTION) {
+            return;
+        }
+
+        String sql = "DELETE FROM tbl_product WHERE product_id=?";
+
+        try (Connection con = DBConnection.getConnection(); PreparedStatement pst = con.prepareStatement(sql)) {
+
+            pst.setInt(1, Integer.parseInt(lbl_prodID.getText().trim()));
+
+            int rows = pst.executeUpdate();
+
+            if (rows > 0) {
+                JOptionPane.showMessageDialog(this, "Product deleted successfully!");
+                loadProducts();
+                clearFields();
+                updateButtonStates(false);
+            } else {
+                JOptionPane.showMessageDialog(this, " No product found to delete.");
+            }
+
+        } catch (SQLException e) {
             JOptionPane.showMessageDialog(this, "Error Deleting Product: " + e.getMessage());
-            clearFields();
+            e.printStackTrace();
         }
     }
 
+
     private void findProduct() {
+        // Validate input
+        if (fld_search.getText().trim().isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Please enter a Product ID to search!");
+            return;
+        }
+
+        int productId;
         try {
-            pst = con.prepareStatement("SELECT * FROM tbl_product WHERE product_id=?");
-            pst.setInt(1, Integer.parseInt(fld_search.getText()));
-            rs = pst.executeQuery();
+            productId = Integer.parseInt(fld_search.getText().trim());
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(this, "Invalid Product ID. Please enter a numeric value.");
+            return;
+        }
+
+        // Ensure connection is open
+        Connection con = DBConnection.getConnection();
+        if (con == null) {
+            JOptionPane.showMessageDialog(this, "Database connection failed!");
+            return;
+        }
+
+        try {
+            String sql = "SELECT * FROM tbl_product WHERE product_id = ?";
+            PreparedStatement pst = con.prepareStatement(sql);
+            pst.setInt(1, productId);
+            ResultSet rs = pst.executeQuery();
 
             if (rs.next()) {
-                lbl_prodID.setText(rs.getString("product_id"));
+                lbl_prodID.setText(String.valueOf(rs.getInt("product_id")));
                 fld_name.setText(rs.getString("product_name"));
                 jComboBoxCategory.setSelectedItem(rs.getString("category"));
-                fld_price.setText(rs.getString("price"));
-                fld_qty.setText(rs.getString("stock_quantity"));
+                fld_price.setText(String.valueOf(rs.getDouble("price")));
+                fld_qty.setText(String.valueOf(rs.getInt("stock_quantity")));
                 productImage = rs.getBytes("image");
 
-                if (productImage != null) {
-                    ImageIcon icon = new ImageIcon(new ImageIcon(productImage).getImage()
-                            .getScaledInstance(lbl_img.getWidth(), lbl_img.getHeight(), java.awt.Image.SCALE_SMOOTH));
+                if (productImage != null && productImage.length > 0) {
+                    ImageIcon icon = new ImageIcon(
+                            new ImageIcon(productImage)
+                                    .getImage()
+                                    .getScaledInstance(lbl_img.getWidth(), lbl_img.getHeight(), java.awt.Image.SCALE_SMOOTH)
+                    );
                     lbl_img.setIcon(icon);
                 } else {
                     lbl_img.setIcon(null);
                 }
+
+                updateButtonStates(true); // disable add, enable upload/delete
+
             } else {
                 JOptionPane.showMessageDialog(this, "Product not found!");
+                clearFields();
+                updateButtonStates(false);
             }
+
+            rs.close();
+            pst.close();
+
         } catch (Exception e) {
             JOptionPane.showMessageDialog(this, "Error Finding Product: " + e.getMessage());
         }
+        addFieldListeners();
     }
+
     
     private void clearFields() {
+        fld_search.setText("");
         lbl_prodID.setText("");
         fld_name.setText("");
         jComboBoxCategory.setSelectedIndex(-1);
@@ -228,39 +350,58 @@ public class ManageProduct extends javax.swing.JFrame {
     }
     
     private void tableRowClicked() {
-        DefaultTableModel model = (DefaultTableModel) jTable1.getModel();
         int selectedRow = jTable1.getSelectedRow();
+        if (selectedRow < 0) {
+            return;
+        }
 
-        if (selectedRow != -1) {
-            
-            lbl_prodID.setText(model.getValueAt(selectedRow, 0).toString());
-            fld_name.setText(model.getValueAt(selectedRow, 1).toString());
-            jComboBoxCategory.setSelectedItem(model.getValueAt(selectedRow, 2).toString());
-            fld_price.setText(model.getValueAt(selectedRow, 3).toString());
-            fld_qty.setText(model.getValueAt(selectedRow, 4).toString());
+        lbl_prodID.setText(jTable1.getValueAt(selectedRow, 0).toString());
+        fld_name.setText(jTable1.getValueAt(selectedRow, 1).toString());
+        
+        jComboBoxCategory.setSelectedItem(jTable1.getValueAt(selectedRow, 2).toString());
+        fld_price.setText(jTable1.getValueAt(selectedRow, 3).toString());
+        fld_qty.setText(jTable1.getValueAt(selectedRow, 4).toString());
 
-            
-            try {
-                int id = Integer.parseInt(lbl_prodID.getText());
-                PreparedStatement pst = con.prepareStatement("SELECT image FROM tbl_product WHERE product_id = ?");
-                pst.setInt(1, id);
-                ResultSet rs = pst.executeQuery();
+        // Re-fetch the image from the database (using DBConnection)
+        int productId = Integer.parseInt(lbl_prodID.getText());
 
-                if (rs.next()) {
-                    byte[] imageBytes = rs.getBytes("image");
-                    if (imageBytes != null) {
-                        productImage = imageBytes; // keep it stored for update
-                        ImageIcon icon = new ImageIcon(new ImageIcon(imageBytes)
-                                .getImage().getScaledInstance(lbl_img.getWidth(), lbl_img.getHeight(), java.awt.Image.SCALE_SMOOTH));
-                        lbl_img.setIcon(icon);
-                    } else {
-                        lbl_img.setIcon(null);
-                        productImage = null;
-                    }
+        try (Connection con = DBConnection.getConnection(); PreparedStatement pst = con.prepareStatement("SELECT image FROM tbl_product WHERE product_id = ?")) {
+
+            pst.setInt(1, productId);
+            ResultSet rs = pst.executeQuery();
+
+            if (rs.next()) {
+                byte[] imgBytes = rs.getBytes("image");
+                if (imgBytes != null) {
+                    ImageIcon icon = new ImageIcon(
+                            new ImageIcon(imgBytes).getImage().getScaledInstance(
+                                    lbl_img.getWidth() > 0 ? lbl_img.getWidth() : 150,
+                                    lbl_img.getHeight() > 0 ? lbl_img.getHeight() : 150,
+                                    Image.SCALE_SMOOTH
+                            )
+                    );
+                    lbl_img.setIcon(icon);
+                    productImage = imgBytes;
+                } else {
+                    lbl_img.setIcon(null);
                 }
-            } catch (Exception e) {
-                JOptionPane.showMessageDialog(this, "Error loading image: " + e.getMessage());
             }
+
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(this, "Error loading image: " + e.getMessage());
+            e.printStackTrace();
+        }
+        
+        int row = jTable1.getSelectedRow();
+        if (row != -1) {
+            lbl_prodID.setText(jTable1.getValueAt(row, 0).toString());
+            fld_name.setText(jTable1.getValueAt(row, 1).toString());
+            jComboBoxCategory.setSelectedItem(jTable1.getValueAt(row, 2).toString());
+            fld_price.setText(jTable1.getValueAt(row, 3).toString());
+            fld_qty.setText(jTable1.getValueAt(row, 4).toString());
+
+            // Enable Upload/Delete buttons, disable Add
+            updateButtonStates(true);
         }
     }
     
@@ -325,13 +466,13 @@ public class ManageProduct extends javax.swing.JFrame {
     }
     
     private boolean isDuplicateProduct(String productName, Integer excludeId) {
-        try {
-            String query = "SELECT COUNT(*) FROM tbl_product WHERE product_name = ?";
-            if (excludeId != null) {
-                query += " AND product_id != ?"; // exclude current ID when updating
-            }
+        String query = "SELECT COUNT(*) FROM tbl_product WHERE product_name = ?";
+        if (excludeId != null) {
+            query += " AND product_id != ?"; // exclude current ID when updating
+        }
 
-            PreparedStatement checkStmt = con.prepareStatement(query);
+        try (Connection con = DBConnection.getConnection(); PreparedStatement checkStmt = con.prepareStatement(query)) {
+
             checkStmt.setString(1, productName);
             if (excludeId != null) {
                 checkStmt.setInt(2, excludeId);
@@ -342,6 +483,7 @@ public class ManageProduct extends javax.swing.JFrame {
                 int count = rs.getInt(1);
                 return count > 0; // duplicate found
             }
+
         } catch (SQLException e) {
             JOptionPane.showMessageDialog(this, "Error checking duplicate: " + e.getMessage());
         }
@@ -353,7 +495,7 @@ public class ManageProduct extends javax.swing.JFrame {
 
         Connection conn = DBConnection.getConnection();
         DefaultTableModel model = (DefaultTableModel) jTable1.getModel();
-        model.setRowCount(0); // Clear table
+        model.setRowCount(0); // clear table
 
         String query;
         if (selectedCategory.equals("All Products")) {
@@ -369,17 +511,96 @@ public class ManageProduct extends javax.swing.JFrame {
 
             ResultSet rs = pst.executeQuery();
             while (rs.next()) {
+                byte[] imgBytes = rs.getBytes("image");
+                ImageIcon icon = null;
+
+                if (imgBytes != null) {
+                    Image img = new ImageIcon(imgBytes).getImage().getScaledInstance(70, 70, Image.SCALE_SMOOTH);
+                    icon = new ImageIcon(img);
+                }
+
                 model.addRow(new Object[]{
                     rs.getString("product_id"),
                     rs.getString("product_name"),
-                    rs.getString("price"),
-                    rs.getString("category")
-                        ,rs.getString("image_path")
+                    rs.getString("category"),
+                    rs.getDouble("price"),
+                    rs.getInt("stock_quantity"),
+                    icon // store thumbnail directly in table model
                 });
             }
+
+            // Apply the image renderer after reloading data
+            jTable1.getColumn("Image").setCellRenderer(new ImageRenderer());
+
         } catch (SQLException e) {
             JOptionPane.showMessageDialog(this, "Error filtering products: " + e.getMessage(), "Database Error", JOptionPane.ERROR_MESSAGE);
         }
+    }
+    
+    class ImageRenderer extends JLabel implements TableCellRenderer {
+
+        public ImageRenderer() {
+            setOpaque(true);
+            setHorizontalAlignment(CENTER);
+            setVerticalAlignment(CENTER);
+        }
+
+        @Override
+        public Component getTableCellRendererComponent(JTable table, Object value,
+                boolean isSelected, boolean hasFocus, int row, int column) {
+
+            if (value instanceof ImageIcon) {
+                setIcon((ImageIcon) value);
+                setText("");
+            } else {
+                setIcon(null);
+                setText("No Image");
+            }
+
+            return this;
+        }
+    }
+    
+    // Checks if required fields are filled
+    private boolean areFieldsFilled() {
+        return !fld_name.getText().trim().isEmpty()
+                && !fld_price.getText().trim().isEmpty()
+                && !fld_qty.getText().trim().isEmpty();
+    }
+
+// Refresh button states depending on state
+    private void updateButtonStates(boolean rowSelected) {
+        if (rowSelected) {
+            // When a row is selected
+            btn_add.setEnabled(false);
+            btn_update.setEnabled(true);
+            btn_delete.setEnabled(true);
+        } else {
+            // No row selected
+            btn_add.setEnabled(areFieldsFilled());
+            btn_update.setEnabled(false);
+            btn_delete.setEnabled(false);
+        }
+    }
+    
+    private void addFieldListeners() {
+        javax.swing.event.DocumentListener listener = new javax.swing.event.DocumentListener() {
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                updateButtonStates(false);
+            }
+
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                updateButtonStates(false);
+            }
+
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                updateButtonStates(false);
+            }
+        };
+
+        fld_name.getDocument().addDocumentListener(listener);
+        fld_price.getDocument().addDocumentListener(listener);
+        fld_qty.getDocument().addDocumentListener(listener);
     }
 
 
@@ -416,8 +637,14 @@ public class ManageProduct extends javax.swing.JFrame {
         jComboBoxCategory = new javax.swing.JComboBox<>();
         lbl_prodID = new javax.swing.JLabel();
         jcmbFilter = new javax.swing.JComboBox<>();
+        jButton1 = new javax.swing.JButton();
 
         setDefaultCloseOperation(javax.swing.WindowConstants.EXIT_ON_CLOSE);
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            public void windowOpened(java.awt.event.WindowEvent evt) {
+                formWindowOpened(evt);
+            }
+        });
 
         jPanel1.setBorder(javax.swing.BorderFactory.createEtchedBorder());
 
@@ -541,6 +768,13 @@ public class ManageProduct extends javax.swing.JFrame {
             }
         });
 
+        jButton1.setText("Refresh");
+        jButton1.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                jButton1ActionPerformed(evt);
+            }
+        });
+
         javax.swing.GroupLayout jPanel1Layout = new javax.swing.GroupLayout(jPanel1);
         jPanel1.setLayout(jPanel1Layout);
         jPanel1Layout.setHorizontalGroup(
@@ -562,13 +796,13 @@ public class ManageProduct extends javax.swing.JFrame {
                                 .addComponent(lbl_img, javax.swing.GroupLayout.PREFERRED_SIZE, 212, javax.swing.GroupLayout.PREFERRED_SIZE))
                             .addGroup(jPanel1Layout.createSequentialGroup()
                                 .addGap(18, 18, 18)
-                                .addComponent(jComboBoxCategory, 0, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
+                                .addComponent(jComboBoxCategory, 0, 257, Short.MAX_VALUE))
                             .addGroup(jPanel1Layout.createSequentialGroup()
                                 .addGap(18, 18, 18)
                                 .addGroup(jPanel1Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-                                    .addComponent(fld_price, javax.swing.GroupLayout.DEFAULT_SIZE, 257, Short.MAX_VALUE)
-                                    .addComponent(fld_name, javax.swing.GroupLayout.DEFAULT_SIZE, 257, Short.MAX_VALUE)
-                                    .addComponent(fld_qty, javax.swing.GroupLayout.DEFAULT_SIZE, 257, Short.MAX_VALUE)
+                                    .addComponent(fld_price)
+                                    .addComponent(fld_name)
+                                    .addComponent(fld_qty)
                                     .addComponent(lbl_prodID, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))))
                         .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
                     .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, jPanel1Layout.createSequentialGroup()
@@ -593,8 +827,10 @@ public class ManageProduct extends javax.swing.JFrame {
                                 .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
                                 .addComponent(btn_delete, javax.swing.GroupLayout.PREFERRED_SIZE, 128, javax.swing.GroupLayout.PREFERRED_SIZE)
                                 .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)))))
-                .addGroup(jPanel1Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING)
+                .addGroup(jPanel1Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING, false)
                     .addGroup(jPanel1Layout.createSequentialGroup()
+                        .addComponent(jButton1, javax.swing.GroupLayout.PREFERRED_SIZE, 105, javax.swing.GroupLayout.PREFERRED_SIZE)
+                        .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
                         .addComponent(jLabel8, javax.swing.GroupLayout.PREFERRED_SIZE, 78, javax.swing.GroupLayout.PREFERRED_SIZE)
                         .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
                         .addComponent(jcmbFilter, javax.swing.GroupLayout.PREFERRED_SIZE, 120, javax.swing.GroupLayout.PREFERRED_SIZE))
@@ -639,13 +875,17 @@ public class ManageProduct extends javax.swing.JFrame {
                         .addComponent(btn_upload)
                         .addGap(35, 35, 35))
                     .addComponent(jScrollPane1, javax.swing.GroupLayout.PREFERRED_SIZE, 489, javax.swing.GroupLayout.PREFERRED_SIZE))
-                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
-                .addGroup(jPanel1Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
-                    .addComponent(btn_add, javax.swing.GroupLayout.PREFERRED_SIZE, 41, javax.swing.GroupLayout.PREFERRED_SIZE)
-                    .addComponent(btn_update, javax.swing.GroupLayout.PREFERRED_SIZE, 41, javax.swing.GroupLayout.PREFERRED_SIZE)
-                    .addComponent(btn_delete, javax.swing.GroupLayout.PREFERRED_SIZE, 41, javax.swing.GroupLayout.PREFERRED_SIZE)
-                    .addComponent(jLabel8)
-                    .addComponent(jcmbFilter, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE))
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
+                .addGroup(jPanel1Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                    .addGroup(jPanel1Layout.createSequentialGroup()
+                        .addGap(0, 0, Short.MAX_VALUE)
+                        .addGroup(jPanel1Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                            .addComponent(btn_add, javax.swing.GroupLayout.PREFERRED_SIZE, 41, javax.swing.GroupLayout.PREFERRED_SIZE)
+                            .addComponent(btn_update, javax.swing.GroupLayout.PREFERRED_SIZE, 41, javax.swing.GroupLayout.PREFERRED_SIZE)
+                            .addComponent(btn_delete, javax.swing.GroupLayout.PREFERRED_SIZE, 41, javax.swing.GroupLayout.PREFERRED_SIZE)
+                            .addComponent(jLabel8)
+                            .addComponent(jcmbFilter, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)))
+                    .addComponent(jButton1, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
                 .addGap(81, 81, 81))
         );
 
@@ -655,8 +895,8 @@ public class ManageProduct extends javax.swing.JFrame {
             layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
             .addGroup(layout.createSequentialGroup()
                 .addGap(17, 17, 17)
-                .addComponent(jPanel1, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
-                .addContainerGap(javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
+                .addComponent(jPanel1, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                .addContainerGap())
         );
         layout.setVerticalGroup(
             layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
@@ -713,6 +953,15 @@ public class ManageProduct extends javax.swing.JFrame {
         filterProducts();
     }//GEN-LAST:event_jcmbFilterActionPerformed
 
+    private void formWindowOpened(java.awt.event.WindowEvent evt) {//GEN-FIRST:event_formWindowOpened
+        updateButtonStates(false);
+    }//GEN-LAST:event_formWindowOpened
+
+    private void jButton1ActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_jButton1ActionPerformed
+        clearFields();
+        loadProducts();
+    }//GEN-LAST:event_jButton1ActionPerformed
+
     /**
      * @param args the command line arguments
      */
@@ -748,6 +997,7 @@ public class ManageProduct extends javax.swing.JFrame {
     private javax.swing.JTextField fld_price;
     private javax.swing.JTextField fld_qty;
     private javax.swing.JTextField fld_search;
+    private javax.swing.JButton jButton1;
     private javax.swing.JComboBox<String> jComboBoxCategory;
     private javax.swing.JLabel jLabel1;
     private javax.swing.JLabel jLabel2;
